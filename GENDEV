@@ -1,0 +1,911 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Générateur de déviations — GTFS</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+:root {
+  --ink:#222;
+  --muted:#657078;
+  --line:#dfe4e7;
+  --soft:#f6f8f9;
+  --accent:#155e75;
+  --orange:#e67e22;
+  --green:#167a5a;
+}
+
+
+* {
+  box-sizing:border-box;
+}
+
+body {
+  margin:0;
+  background:#f4f6f7;
+  color:var(--ink);
+  font:15px/1.5 system-ui,-apple-system,Segoe UI,Arial,sans-serif;
+}
+
+
+header {
+  background:#fff;
+  border-bottom:1px solid var(--line);
+  padding:20px max(20px,calc((100vw - 1280px)/2));
+}
+
+
+header h1 {
+  font-size:1.5rem;
+  margin:0 0 4px;
+}
+
+header p {
+  margin:0;
+  color:var(--muted);
+}
+
+
+main {
+  max-width:1280px;
+  margin:20px auto;
+  padding:0 18px 50px;
+  display:grid;
+  grid-template-columns:minmax(300px,380px) minmax(0,1fr);
+  gap:20px;
+}
+
+
+.panel {
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:16px;
+  margin-bottom:16px;
+}
+
+
+h2 {
+  font-size:1.05rem;
+  margin:0 0 10px;
+}
+
+
+input[type=text] {
+  width:100%;
+  padding:9px 10px;
+  border:1px solid #cbd3d8;
+  border-radius:7px;
+  font:inherit;
+}
+
+
+button {
+  font:inherit;
+  border:1px solid #bdc8ce;
+  border-radius:7px;
+  background:#fff;
+  padding:8px 12px;
+  cursor:pointer;
+  font-weight:650;
+}
+
+button:hover {
+  background:#f0f5f6;
+}
+
+button.primary {
+  background:var(--accent);
+  border-color:var(--accent);
+  color:#fff;
+}
+
+button.danger {
+  color:#9e2929;
+}
+
+
+.hint {
+  font-size:.88rem;
+  color:var(--muted);
+  margin:6px 0 0;
+}
+
+.actions {
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  margin-top:10px;
+}
+
+
+.statusline {
+  font-size:.9rem;
+  padding:9px 11px;
+  background:var(--soft);
+  border-radius:7px;
+  margin-top:10px;
+}
+
+.statusline.ok {
+  background:#eaf7f0;
+  color:#166343;
+}
+
+.statusline.err {
+  background:#fff0ef;
+  color:#a32924;
+}
+
+
+#map {
+  height:560px;
+  border-radius:10px;
+  border:1px solid var(--line);
+  z-index:0;
+}
+
+
+#search {
+  position:relative;
+  margin-bottom:10px;
+}
+
+#results {
+  position:absolute;
+  left:0;
+  right:0;
+  top:100%;
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:7px;
+  z-index:1000;
+  max-height:240px;
+  overflow:auto;
+}
+
+
+#results div {
+  padding:7px 10px;
+  cursor:pointer;
+  border-bottom:1px solid #eee;
+}
+
+#results div:hover {
+  background:var(--soft);
+}
+
+
+.dev {
+  border:1px solid var(--line);
+  border-radius:8px;
+  padding:9px 11px;
+  margin-top:8px;
+  border-left:4px solid var(--orange);
+}
+
+
+.dev b {
+  cursor:pointer;
+}
+
+.dev ul {
+  margin:4px 0 0;
+  padding-left:18px;
+  font-size:.88rem;
+  color:var(--muted);
+}
+
+
+dialog {
+  border:0;
+  border-radius:12px;
+  padding:20px;
+  width:min(560px,94vw);
+  box-shadow:0 10px 40px #0004;
+}
+
+dialog::backdrop {
+  background:#0006;
+}
+
+
+.lrow {
+  display:grid;
+  grid-template-columns:auto 1fr;
+  gap:8px 10px;
+  align-items:center;
+  padding:7px 0;
+  border-bottom:1px solid #eee;
+}
+
+
+.rl {
+  display:flex;
+  gap:6px;
+  align-items:center;
+  font-size:.9rem;
+  padding:2px 0;
+}
+
+#routeList {
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(110px,1fr));
+  max-height:200px;
+  overflow:auto;
+  border:1px solid var(--line);
+  border-radius:8px;
+  padding:6px 10px;
+  margin-top:8px;
+}
+
+
+.lrow input[type=text] {
+  grid-column:2;
+}
+
+.lrow label {
+  font-weight:650;
+}
+
+
+iframe {
+  width:100%;
+  border:1px solid var(--line);
+  border-radius:10px;
+  background:#fff;
+  min-height:300px;
+}
+
+
+@media(max-width:850px) {
+  main {
+    grid-template-columns:1fr;
+  }
+}
+
+</style>
+</head>
+<body>
+<header><h1>Générateur de déviations réseau</h1><p>Clique sur les arrêts du plan, indique l’arrêt de report pour chaque ligne, exporte le tableau.</p></header>
+<main>
+<section>
+  <div class="panel">
+    <h2>1. Importer le GTFS</h2>
+    <input id="gtfsFolder" type="file" webkitdirectory directory multiple>
+    <p class="hint">Dossier GTFS décompressé (routes, trips, stop_times, stops). Ajoute dans le même dossier un fichier .txt de pictogrammes : une ligne par ligne du réseau, <i>numéro de ligne</i> puis <i>lien .png</i>, séparés par une tabulation, une virgule ou un point-virgule.</p>
+    <div id="importStatus" class="statusline">En attente des fichiers GTFS.</div>
+  </div>
+  <div class="panel">
+    <h2>2. Arrêts non desservis</h2>
+    <div id="devList"><p class="hint">Aucun arrêt sélectionné. Clique sur un arrêt du plan.</p></div>
+  </div>
+  <div class="panel">
+    <h2>3. Lignes affichées dans le rendu</h2>
+    <div class="actions" style="margin-top:0"><button id="rAll" type="button">Toutes</button><button id="rNone" type="button">Aucune</button><button id="rImp" type="button">Lignes impactées</button></div>
+    <div id="routeList"><p class="hint">Importe un GTFS.</p></div>
+  </div>
+  <div class="panel">
+    <h2>4. Sauvegarder et exporter</h2>
+    <div class="actions">
+      <button id="saveDraft" type="button">Sauvegarder le brouillon</button>
+      <button id="loadDraft" type="button">Restaurer</button>
+      <button id="exportArchive" type="button">Enregistrer une archive (fichier)</button>
+      <button id="importArchive" type="button">Ouvrir une archive</button><input id="archiveFile" type="file" accept=".json,application/json" hidden>
+      <button id="exportHtml" type="button" class="primary">Télécharger le HTML</button>
+      <button id="copyHtml" type="button">Copier le HTML</button>
+    </div>
+    <div id="saveStatus" class="statusline">Le brouillon (navigateur) et l’archive (fichier .json) conservent les arrêts, reports et lignes choisies, pas le GTFS.</div>
+  </div>
+</section>
+<section>
+  <div class="panel">
+    <div id="search"><input id="stopSearch" type="text" placeholder="Rechercher un arrêt pour le centrer sur le plan…" autocomplete="off"><div id="results" hidden></div></div>
+    <div id="map"></div>
+    <p class="hint">Points bleus : arrêts du réseau · points orange : arrêts non desservis. Clique sur un arrêt pour le dévier ou modifier ses reports.</p>
+  </div>
+  <div class="panel"><h2>Aperçu du rendu final</h2><iframe id="preview" title="Aperçu"></iframe></div>
+</section>
+</main>
+<dialog id="dlg"></dialog>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+/*
+ * Générateur de déviations GTFS — organisation du code
+ *   1. Outils et état global      5. Pop-up de déviation
+ *   2. Lecture CSV                6. Archive, lignes du rendu, mise à jour
+ *   3. Import du GTFS             7. Génération du HTML final
+ *   4. Plan et marqueurs          8. Export, sauvegarde, boutons
+ * Les déviations sont stockées dans S.dev : arrêt -> { ligne -> {on, report} }.
+ */
+(function () {
+    'use strict';
+
+    // ====================================================================
+    // 1. OUTILS ET ÉTAT GLOBAL
+    // ====================================================================
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const S = { routes: [], stops: {}, routesByStop: {}, icons: {}, dev: new Map(), hidden: new Set(), dir: {} }; // dev: stopId -> {routeId:{on,report}}
+    const markers = {};
+    let map, layer;
+    const STD = ['agency', 'calendar', 'calendar_dates', 'routes', 'trips', 'stop_times', 'stops', 'shapes', 'feed_info', 'transfers', 'frequencies', 'fare_attributes', 'fare_rules', 'pathways', 'levels', 'translations', 'attributions'];
+
+    // ====================================================================
+    // 2. LECTURE DES FICHIERS CSV (fonctions bas niveau)
+    // ====================================================================
+
+    // Découpe une ligne CSV en colonnes (gère les guillemets).
+    function parseLine(l) {
+        const o = [];
+        let c = '', q = false;
+        for (let i = 0; i < l.length; i++) {
+            const ch = l[i];
+            if (q) {
+                if (ch === '"' && l[i + 1] === '"') {
+                    c += '"';
+                    i++;
+                }
+                else if (ch === '"')
+                    q = false;
+                else
+                    c += ch;
+            }
+            else if (ch === '"')
+                q = true;
+            else if (ch === ',') {
+                o.push(c);
+                c = '';
+            }
+            else
+                c += ch;
+        }
+        o.push(c);
+        return o;
+    }
+
+    // Parcourt un texte ligne par ligne (économe en mémoire).
+    function* lines(t) {
+        t = t.replace(/^\uFEFF/, '');
+        let p = 0;
+        while (p < t.length) {
+            let e = t.indexOf('\n', p);
+            if (e < 0)
+                e = t.length;
+            let l = t.slice(p, e);
+            if (l.endsWith('\r'))
+                l = l.slice(0, -1);
+            p = e + 1;
+            if (l)
+                yield l;
+        }
+    }
+
+    // Lit un CSV et ne garde que les colonnes demandées.
+    function table(t, keep) {
+        const it = lines(t), h = parseLine(it.next().value || '').map(x => x.trim()), ix = keep.map(k => h.indexOf(k)), out = [];
+        for (const l of it) {
+            const r = l.includes('"') ? parseLine(l) : l.split(',');
+            const o = {};
+            keep.forEach((k, i) => o[k] = ix[i] >= 0 ? (r[ix[i]] ?? '') : '');
+            out.push(o);
+        }
+        return out;
+    }
+
+    // Retrouve un fichier du dossier par son nom.
+    function byName(files, n) {
+        return files.find(f => f.name.toLowerCase() === n);
+    }
+
+    // ====================================================================
+    // 3. IMPORT DU GTFS (lignes, arrêts, pictogrammes)
+    // ====================================================================
+
+    // Lit le GTFS : lignes, arrêts, lignes passant par chaque arrêt, sens, pictogrammes.
+    async function importGTFS(files) {
+        const st = $('importStatus');
+        st.className = 'statusline';
+        st.textContent = 'Lecture en cours…';
+        const need = ['routes.txt', 'trips.txt', 'stop_times.txt', 'stops.txt'], miss = need.filter(n => !byName(files, n));
+        if (miss.length) {
+            st.className = 'statusline err';
+            st.textContent = 'Fichiers manquants : ' + miss.join(', ');
+            return;
+        }
+        try {
+            const [rt, tr, stp] = await Promise.all(['routes.txt', 'trips.txt', 'stops.txt'].map(n => byName(files, n).text()));
+            const routes = table(rt, ['route_id', 'route_short_name', 'route_long_name']);
+            const tripRoute = {};
+            const tripDir = {};
+            table(tr, ['trip_id', 'route_id', 'trip_headsign', 'direction_id']).forEach(t => {
+                tripRoute[t.trip_id] = t.route_id;
+                tripDir[t.trip_id] = t.trip_headsign ? 'direction ' + t.trip_headsign : (t.direction_id !== '' ? 'sens ' + t.direction_id : '');
+            });
+            S.stops = {};
+            table(stp, ['stop_id', 'stop_name', 'stop_lat', 'stop_lon']).forEach(s => S.stops[s.stop_id] = s);
+            const rbs = {}, dir = {};
+            {
+                const text = await byName(files, 'stop_times.txt').text();
+                const it = lines(text), h = parseLine(it.next().value).map(x => x.trim()), a = h.indexOf('trip_id'), b = h.indexOf('stop_id');
+                for (const l of it) {
+                    const r = l.includes('"') ? parseLine(l) : l.split(',');
+                    const rid = tripRoute[r[a]];
+                    if (rid === undefined)
+                        continue;
+                    (rbs[r[b]] ??= new Set()).add(rid);
+                    const k = rid + '|' + r[b];
+                    if (!(k in dir))
+                        dir[k] = tripDir[r[a]];
+                }
+            }
+            S.dir = dir;
+            S.routesByStop = rbs;
+            const used = new Set(Object.values(tripRoute));
+            S.routes = routes.filter(r => used.has(r.route_id)).sort((x, y) => String(x.route_short_name || x.route_id).localeCompare(String(y.route_short_name || y.route_id), 'fr', { numeric: true }));
+            S.icons = {};
+            for (const f of files) {
+                const nm = f.name.toLowerCase();
+                if (!nm.endsWith('.txt') || STD.includes(nm.slice(0, -4)))
+                    continue;
+                (await f.text()).split(/\r?\n/).forEach(l => {
+                    const m = l.match(/https?:\/\/[^\s"',;\t]+/i);
+                    if (!m)
+                        return;
+                    const k = l.replace(m[0], '').replace(/["',;\t]/g, ' ').trim().toLowerCase();
+                    if (k)
+                        S.icons[k] = m[0];
+                });
+            }
+            S.dev = new Map();
+            S.hidden = new Set();
+            drawStops();
+            renderRoutes();
+            if (S.pending) {
+                applyArchive(S.pending);
+                S.pending = null;
+            }
+            else
+                update();
+            st.className = 'statusline ok';
+            st.textContent = `GTFS chargé : ${S.routes.length} lignes, ${Object.keys(rbs).length} arrêts, ${Object.keys(S.icons).length} pictogrammes.`;
+        }
+        catch (e) {
+            st.className = 'statusline err';
+            st.textContent = 'Erreur de lecture GTFS : ' + e.message;
+        }
+    }
+
+    // ====================================================================
+    // 4. PLAN (Leaflet / OpenStreetMap) ET MARQUEURS D'ARRÊTS
+    // ====================================================================
+
+    // Crée le plan OpenStreetMap.
+    function initMap() {
+        map = L.map('map', { preferCanvas: true }).setView([46.6, 2.5], 6);
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+        layer = L.layerGroup().addTo(map);
+    }
+
+    // Nom d'un arrêt à partir de son identifiant.
+    const sName = id => S.stops[id]?.stop_name || id;
+
+    // Numéro (ou identifiant) d'une ligne.
+    function routeName(r) {
+        return r.route_short_name || r.route_id;
+    }
+
+    // Couleur du point : bleu = normal, orange = non desservi.
+    function style(id) {
+        const on = S.dev.has(id);
+        return { radius: on ? 8 : 5, color: '#fff', weight: 1.5, fillColor: on ? '#e67e22' : '#2b6cb0', fillOpacity: .95 };
+    }
+
+    // Dessine tous les arrêts du réseau sur le plan.
+    function drawStops() {
+        layer.clearLayers();
+        for (const k in markers)
+            delete markers[k];
+        const pts = [];
+        for (const id in S.routesByStop) {
+            const s = S.stops[id];
+            if (!s || !isFinite(+s.stop_lat) || s.stop_lat === '' || s.stop_lon === '')
+                continue;
+            const m = L.circleMarker([+s.stop_lat, +s.stop_lon], style(id)).bindTooltip(s.stop_name);
+            m.on('click', () => openDlg(id));
+            m.addTo(layer);
+            markers[id] = m;
+            pts.push([+s.stop_lat, +s.stop_lon]);
+        }
+        if (pts.length)
+            map.fitBounds(pts, { padding: [20, 20] });
+    }
+
+    // Lignes qui passent par un arrêt.
+    function routesOf(id) {
+        const set = S.routesByStop[id] || new Set();
+        return S.routes.filter(r => set.has(r.route_id));
+    }
+
+    // ====================================================================
+    // 5. POP-UP DE DÉVIATION D'UN ARRÊT
+    // ====================================================================
+    // Maxime MATEO
+    // Ouvre le pop-up : une case et un arrêt de report par ligne.
+    function openDlg(id) {
+        const cur = S.dev.get(id) || {}, rs = routesOf(id), d = $('dlg');
+        d.innerHTML = `<h2>${esc(sName(id))}</h2><p class="hint">Coche les lignes pour lesquelles cet arrêt n’est pas desservi et indique l’arrêt de report.</p>
+  <div>${rs.map((r, i) => `<div class="lrow"><input type="checkbox" id="c${i}" data-r="${esc(r.route_id)}" ${S.dev.has(id) ? (cur[r.route_id]?.on ? 'checked' : '') : 'checked'}><label for="c${i}">${esc(routeName(r))}${r.route_long_name ? ' — ' + esc(r.route_long_name) : ''}</label><input type="text" data-p="${i}" placeholder="Arrêt de report" value="${esc(cur[r.route_id]?.report || '')}"></div>`).join('')}</div>
+  <div class="actions"><button class="primary" id="ok">Valider</button><button id="no">Annuler</button>${S.dev.has(id) ? '<button class="danger" id="del">Retirer cet arrêt</button>' : ''}</div>`;
+        const close = () => d.close();
+        $('no').onclick = close;
+        if ($('del'))
+            $('del').onclick = () => {
+                if (confirm('Retirer la déviation de « ' + sName(id) + ' » pour toutes les lignes ?')) {
+                    S.dev.delete(id);
+                    close();
+                    refresh(id);
+                }
+            };
+        $('ok').onclick = () => {
+            const o = {};
+            let n = 0;
+            d.querySelectorAll('input[type=checkbox]').forEach((c, i) => {
+                const rep = d.querySelector(`input[data-p="${i}"]`).value.trim();
+                o[c.dataset.r] = { on: c.checked, report: rep };
+                if (c.checked)
+                    n++;
+            });
+            if (!n) {
+                if (S.dev.has(id)) {
+                    if (!confirm('Aucune ligne cochée : l’arrêt « ' + sName(id) + ' » sera retiré. Continuer ?'))
+                        return;
+                    S.dev.delete(id);
+                }
+            }
+            else
+                S.dev.set(id, o);
+            close();
+            refresh(id);
+        };
+        d.showModal();
+    }
+
+    // ====================================================================
+    // 6. ARCHIVE, CHOIX DES LIGNES ET MISE À JOUR DE L'ÉCRAN
+    // ====================================================================
+
+    // Applique une archive/brouillon (arrêts déviés + lignes choisies).
+    function applyArchive(d) {
+        const dv = Array.isArray(d) ? d : (d.dev || []);
+        S.dev = new Map(dv.filter(([id]) => S.stops[id]));
+        S.hidden = new Set(Array.isArray(d) ? [] : (d.hidden || []));
+        for (const id in markers)
+            markers[id].setStyle(style(id));
+        renderRoutes();
+        update();
+    }
+
+    // Affiche les cases « lignes affichées dans le rendu ».
+    function renderRoutes() {
+        const el = $('routeList');
+        el.innerHTML = S.routes.map(r => `<label class="rl"><input type="checkbox" data-r="${esc(r.route_id)}" ${S.hidden.has(r.route_id) ? '' : 'checked'}>${esc(routeName(r))}</label>`).join('') || '<p class="hint">Importe un GTFS.</p>';
+        el.querySelectorAll('input').forEach(c => c.onchange = () => {
+            c.checked ? S.hidden.delete(c.dataset.r) : S.hidden.add(c.dataset.r);
+            update();
+        });
+    }
+
+    // Vrai si la ligne a au moins un arrêt dévié.
+    const impacted = r => [...S.dev.values()].some(o => o[r.route_id]?.on);
+
+    // Met à jour un point du plan puis l'écran.
+    function refresh(id) {
+        if (markers[id])
+            markers[id].setStyle(style(id));
+        update();
+    }
+
+    // Rafraîchit la liste des arrêts non desservis et l'aperçu.
+    function update() {
+        const el = $('devList');
+        if (!S.dev.size)
+            el.innerHTML = '<p class="hint">Aucun arrêt sélectionné. Clique sur un arrêt du plan.</p>';
+        else {
+            el.innerHTML = '';
+            [...S.dev.keys()].forEach(id => {
+                const o = S.dev.get(id), d = document.createElement('div');
+                d.className = 'dev';
+                d.innerHTML = `<b>${esc(sName(id))}</b><ul>${S.routes.filter(r => o[r.route_id]?.on).map(r => `<li>${esc(routeName(r))}${o[r.route_id].report ? ' → ' + esc(o[r.route_id].report) : ' (report à préciser)'}</li>`).join('')}</ul>`;
+                d.querySelector('b').onclick = () => {
+                    openDlg(id);
+                    if (markers[id])
+                        map.setView(markers[id].getLatLng(), Math.max(map.getZoom(), 15));
+                };
+                el.appendChild(d);
+            });
+        }
+        const f = $('preview');
+        f.srcdoc = makeHTML();
+        f.onload = () => {
+            try {
+                f.style.height = f.contentDocument.documentElement.scrollHeight + 10 + 'px';
+            }
+            catch (e) {
+            }
+        };
+    }
+
+    // ====================================================================
+    // 7. GÉNÉRATION DU HTML FINAL (tableau public)
+    // ====================================================================
+
+    // Date et heure de l'export, arrondies à 5 minutes.
+    function stamp() {
+        const ms = 300000, d = new Date(Math.round(Date.now() / ms) * ms);
+        return d.toLocaleDateString('fr-FR') + ' à ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    // Lignes de texte d'une ligne de bus : regroupe les deux côtés d'un arrêt si le report est identique, sinon précise le sens.
+    function entriesFor(r) {
+        const g = new Map(), out = [];
+        for (const [id, o] of S.dev) {
+            const x = o[r.route_id];
+            if (!x || !x.on)
+                continue;
+            const n = sName(id);
+            if (!g.has(n))
+                g.set(n, []);
+            g.get(n).push({ id, rep: (x.report || '').trim() });
+        }
+        g.forEach((arr, n) => {
+            const m = new Map();
+            arr.forEach(a => {
+                const k = a.rep.toLowerCase();
+                if (!m.has(k))
+                    m.set(k, { rep: a.rep, ids: [] });
+                m.get(k).ids.push(a.id);
+            });
+            const multi = m.size > 1;
+            m.forEach(e => {
+                const dirs = multi ? [...new Set(e.ids.map(i => S.dir[r.route_id + '|' + i]).filter(Boolean))] : [];
+                out.push(`<li><strong>${esc(n)}</strong> non desservi${dirs.length ? ` (${esc(dirs.join(', '))})` : ''}${e.rep ? `<br>→ Report : <strong>${esc(e.rep)}</strong>` : ''}</li>`);
+            });
+        });
+        return out;
+    }
+
+    // Construit la page publique complète (tableau de toutes les lignes cochées).
+    function makeHTML() {
+        const rows = S.routes.filter(r => !S.hidden.has(r.route_id)).map(r => {
+            const items = entriesFor(r);
+            const icon = S.icons[String(r.route_short_name).toLowerCase()] || S.icons[String(r.route_id).toLowerCase()];
+            const dv = items.length > 0;
+            return `<tr><td class="lc">${icon ? `<img src="${esc(icon)}" alt="${esc(routeName(r))}">` : `<strong>${esc(routeName(r))}</strong>`}${r.route_long_name ? `<br><small>${esc(r.route_long_name)}</small>` : ''}</td><td><span class="dot ${dv ? 'o' : 'g'}"></span>${dv ? 'Déviation en cours' : 'Circule normalement'}</td><td>${dv ? `<ul>${items.join('')}</ul>` : ''}</td></tr>`;
+        }).join('');
+        return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Information trafic</title>
+<style>
+body {
+  font-family:Inter,Arial,sans-serif;
+  color:#222;
+  padding:20px;
+  max-width:1100px;
+  margin:auto;
+  line-height:1.5;
+}
+
+h3 {
+  font-size:1.5rem;
+  margin:0 0 4px;
+}
+
+.meta {
+  color:#555;
+  font-size:.92rem;
+  margin:0 0 14px;
+}
+
+.tw {
+  overflow-x:auto;
+  border:1px solid #ddd;
+  border-radius:10px;
+}
+
+table {
+  width:100%;
+  border-collapse:collapse;
+}
+
+th,td {
+  padding:10px 14px;
+  border-bottom:1px solid #eee;
+  text-align:left;
+  vertical-align:middle;
+}
+
+th {
+  background:#f9f9f9;
+}
+
+.lc {
+  text-align:center;
+  min-width:120px;
+}
+
+.lc img {
+  max-height:34px;
+  max-width:75px;
+}
+
+.lc small {
+  color:#666;
+}
+
+.dot {
+  display:inline-block;
+  width:11px;
+  height:11px;
+  border-radius:50%;
+  margin-right:8px;
+}
+
+.g {
+  background:#27ae60;
+}
+
+.o {
+  background:#e67e22;
+}
+
+ul {
+  margin:0;
+  padding-left:18px;
+}
+
+@media(max-width:680px) {
+  thead {
+    display:none;
+  }
+  table,tbody,tr,td {
+    display:block;
+    width:100%;
+  }
+  tr {
+    margin-bottom:12px;
+    padding:8px;
+    border:1px solid #eee;
+    border-radius:8px;
+  }
+  td {
+    border:0;
+    padding:6px 0;
+  }
+  .lc {
+    text-align:left;
+  }
+}
+
+</style></head><body>
+<h3>Information trafic</h3><p class="meta">Mis à jour le ${stamp()}</p>
+<div class="tw"><table><thead><tr><th>Ligne</th><th>Statut</th><th>Arrêts non desservis</th></tr></thead><tbody>${rows || '<tr><td colspan="3">Importe un GTFS.</td></tr>'}</tbody></table></div></body></html>`;
+    }
+
+    // ====================================================================
+    // 8. EXPORT, SAUVEGARDE ET BOUTONS
+    // ====================================================================
+
+    // Télécharge un fichier.
+    function download(c, n, t) {
+        const u = URL.createObjectURL(new Blob([c], { type: t })), a = document.createElement('a');
+        a.href = u;
+        a.download = n;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(u), 1000);
+    }
+
+    // Affiche un message d'état sous les boutons.
+    const msg = (t, ok) => {
+        $('saveStatus').className = 'statusline ' + (ok ? 'ok' : 'err');
+        $('saveStatus').textContent = t;
+    };
+    $('gtfsFolder').addEventListener('change', e => importGTFS([...e.target.files]));
+    $('stopSearch').addEventListener('input', e => {
+        const q = e.target.value.trim().toLocaleLowerCase('fr'), r = $('results');
+        if (q.length < 2) {
+            r.hidden = true;
+            return;
+        }
+        const m = Object.keys(markers).filter(id => sName(id).toLocaleLowerCase('fr').includes(q)).slice(0, 10);
+        r.innerHTML = m.map(id => `<div data-id="${esc(id)}">${esc(sName(id))}</div>`).join('') || '<div>Aucun résultat</div>';
+        r.hidden = false;
+        r.querySelectorAll('[data-id]').forEach(x => x.onclick = () => {
+            r.hidden = true;
+            map.setView(markers[x.dataset.id].getLatLng(), 17);
+            openDlg(x.dataset.id);
+        });
+    });
+    $('rAll').onclick = () => {
+        S.hidden.clear();
+        renderRoutes();
+        update();
+    };
+    $('rNone').onclick = () => {
+        S.hidden = new Set(S.routes.map(r => r.route_id));
+        renderRoutes();
+        update();
+    };
+    $('rImp').onclick = () => {
+        S.hidden = new Set(S.routes.filter(r => !impacted(r)).map(r => r.route_id));
+        renderRoutes();
+        update();
+    };
+    $('saveDraft').onclick = () => {
+        try {
+            localStorage.setItem('gtfsDevDraftV2', JSON.stringify({ dev: [...S.dev], hidden: [...S.hidden] }));
+            msg('Brouillon sauvegardé.', true);
+        }
+        catch (e) {
+            msg('Sauvegarde impossible.', false);
+        }
+    };
+    $('loadDraft').onclick = () => {
+        try {
+            const d = JSON.parse(localStorage.getItem('gtfsDevDraftV2') || 'null');
+            if (!d)
+                return msg('Aucun brouillon trouvé.', false);
+            applyArchive(d);
+            msg('Brouillon restauré (importe le GTFS avant).', true);
+        }
+        catch (e) {
+            msg('Erreur : ' + e.message, false);
+        }
+    };
+    $('exportArchive').onclick = () => {
+        const n = new Date(), p = x => String(x).padStart(2, '0');
+        download(JSON.stringify({ version: 2, savedAt: n.toISOString(), dev: [...S.dev], hidden: [...S.hidden] }, null, 1), `archive-deviations-${n.getFullYear()}-${p(n.getMonth() + 1)}-${p(n.getDate())}-${p(n.getHours())}${p(n.getMinutes())}.json`, 'application/json');
+        msg('Archive enregistrée dans tes téléchargements.', true);
+    };
+    $('importArchive').onclick = () => $('archiveFile').click();
+    $('archiveFile').onchange = async (e) => {
+        const f = e.target.files[0];
+        e.target.value = '';
+        if (!f)
+            return;
+        try {
+            const d = JSON.parse(await f.text());
+            if (!Array.isArray(d) && !d.dev)
+                throw new Error('fichier non reconnu');
+            if (Object.keys(S.stops).length) {
+                applyArchive(d);
+                msg('Archive ouverte : ' + S.dev.size + ' arrêt(s) restauré(s).', true);
+            }
+            else {
+                S.pending = d;
+                msg('Archive lue. Elle sera appliquée dès que tu importeras le GTFS.', true);
+            }
+        }
+        catch (err) {
+            msg('Archive illisible : ' + err.message, false);
+        }
+    };
+    $('exportHtml').onclick = () => {
+        download(makeHTML(), 'information-trafic.html', 'text/html;charset=utf-8');
+        msg('HTML généré.', true);
+    };
+    $('copyHtml').onclick = async () => {
+        try {
+            await navigator.clipboard.writeText(makeHTML());
+            msg('HTML copié.', true);
+        }
+        catch (e) {
+            msg('Copie refusée : télécharge le HTML.', false);
+        }
+    };
+    initMap();
+    update();
+})();
+</script>
+</body></html>
