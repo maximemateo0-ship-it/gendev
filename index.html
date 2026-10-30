@@ -1,8 +1,10 @@
 <!doctype html>
 <html lang="fr">
 <head>
+<script>if (!/13032004$/.test(location.href)) document.documentElement.className = 'pub';</script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="author" content="mmateo">
 <title>Générateur de déviations — GTFS</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
@@ -259,6 +261,83 @@ iframe {
 }
 
 
+.ctl {
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px 24px;
+  margin:0 0 12px;
+  font-size:.9rem;
+}
+
+.ctl label {
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+
+.ctl input[type=range] {
+  width:170px;
+}
+
+.all {
+  background:var(--soft);
+  border-radius:8px;
+  padding:9px 11px;
+  margin:8px 0;
+}
+
+.all label {
+  font-weight:650;
+  display:flex;
+  gap:8px;
+  align-items:center;
+  margin-bottom:6px;
+}
+
+html.pub #app {
+  display:none;
+}
+
+html:not(.pub) #pub {
+  display:none;
+}
+
+html.pub body {
+  background:transparent;
+}
+
+#pubFrame {
+  display:block;
+  border:0;
+  border-radius:0;
+  min-height:0;
+  height:300px;
+  background:transparent;
+}
+
+.pubmsg {
+  text-align:center;
+  color:var(--muted);
+  padding:30px 10px;
+}
+
+[hidden] {
+  display:none !important;
+}
+
+.sig {
+  text-align:center;
+  font-size:.7rem;
+  color:#c3cbd0;
+  padding:0 0 18px;
+}
+
+#preview {
+  display:block;
+  margin:0 auto;
+  max-width:100%;
+}
+
 @media(max-width:850px) {
   main {
     grid-template-columns:1fr;
@@ -268,6 +347,8 @@ iframe {
 </style>
 </head>
 <body>
+<div id="pub"><iframe id="pubFrame" title="Information trafic" hidden></iframe><p id="pubMsg" class="pubmsg" hidden></p></div>
+<div id="app">
 <header><h1>Générateur de déviations réseau</h1><p>Clique sur les arrêts du plan, indique l’arrêt de report pour chaque ligne, exporte le tableau.</p></header>
 <main>
 <section>
@@ -293,7 +374,8 @@ iframe {
       <button id="loadDraft" type="button">Restaurer</button>
       <button id="exportArchive" type="button">Enregistrer une archive (fichier)</button>
       <button id="importArchive" type="button">Ouvrir une archive</button><input id="archiveFile" type="file" accept=".json,application/json" hidden>
-      <button id="exportHtml" type="button" class="primary">Télécharger le HTML</button>
+      <button id="publish" type="button" class="primary">Envoyer vers la page publique</button>
+      <button id="exportHtml" type="button">Télécharger le HTML</button>
       <button id="copyHtml" type="button">Copier le HTML</button>
     </div>
     <div id="saveStatus" class="statusline">Le brouillon (navigateur) et l’archive (fichier .json) conservent les arrêts, reports et lignes choisies, pas le GTFS.</div>
@@ -305,9 +387,19 @@ iframe {
     <div id="map"></div>
     <p class="hint">Points bleus : arrêts du réseau · points orange : arrêts non desservis. Clique sur un arrêt pour le dévier ou modifier ses reports.</p>
   </div>
-  <div class="panel"><h2>Aperçu du rendu final</h2><iframe id="preview" title="Aperçu"></iframe></div>
+  <div class="panel"><h2>Aperçu du rendu final</h2>
+    <div class="ctl">
+      <label>Largeur de l’aperçu <input id="pvW" type="range" min="320" max="1280" step="10" value="1280"><span id="pvWv">pleine largeur</span></label>
+      <label>Lignes empilées sous <input id="bp" type="range" min="0" max="3000" step="10" value="700"><span id="bpv">700 px</span></label>
+    </div>
+    <iframe id="preview" title="Aperçu"></iframe>
+    <p class="hint">Le curseur du haut simule un écran plus étroit. Celui du bas fixe la largeur sous laquelle chaque ligne devient un bloc unique (0 = jamais) ; ce réglage est inclus dans le HTML exporté.</p>
+  </div>
 </section>
 </main>
+<div class="sig">mmateo</div>
+</div>
+<datalist id="stopNames"></datalist>
 <dialog id="dlg"></dialog>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
@@ -327,7 +419,7 @@ iframe {
     // ====================================================================
     const $ = id => document.getElementById(id);
     const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-    const S = { routes: [], stops: {}, routesByStop: {}, icons: {}, dev: new Map(), hidden: new Set(), dir: {} }; // dev: stopId -> {routeId:{on,report}}
+    const S = { routes: [], stops: {}, routesByStop: {}, icons: {}, dev: new Map(), hidden: new Set(), dir: {}, heads: {}, bp: 700 }; // dev: stopId -> {routeId:{on,report}}
     const markers = {};
     let map, layer;
     const STD = ['agency', 'calendar', 'calendar_dates', 'routes', 'trips', 'stop_times', 'stops', 'shapes', 'feed_info', 'transfers', 'frequencies', 'fare_attributes', 'fare_rules', 'pathways', 'levels', 'translations', 'attributions'];
@@ -417,10 +509,13 @@ iframe {
         try {
             const [rt, tr, stp] = await Promise.all(['routes.txt', 'trips.txt', 'stops.txt'].map(n => byName(files, n).text()));
             const routes = table(rt, ['route_id', 'route_short_name', 'route_long_name']);
+            S.heads = {};
             const tripRoute = {};
             const tripDir = {};
             table(tr, ['trip_id', 'route_id', 'trip_headsign', 'direction_id']).forEach(t => {
                 tripRoute[t.trip_id] = t.route_id;
+                if (t.trip_headsign)
+                    (S.heads[t.route_id] ??= new Set()).add(t.trip_headsign);
                 tripDir[t.trip_id] = t.trip_headsign ? 'direction ' + t.trip_headsign : (t.direction_id !== '' ? 'sens ' + t.direction_id : '');
             });
             S.stops = {};
@@ -443,7 +538,11 @@ iframe {
             S.dir = dir;
             S.routesByStop = rbs;
             const used = new Set(Object.values(tripRoute));
-            S.routes = routes.filter(r => used.has(r.route_id)).sort((x, y) => String(x.route_short_name || x.route_id).localeCompare(String(y.route_short_name || y.route_id), 'fr', { numeric: true }));
+            const isLetter = n => Number(/^\p{L}/u.test(n));
+            S.routes = routes.filter(r => used.has(r.route_id)).sort((x, y) => {
+                const a = String(x.route_short_name || x.route_id), b = String(y.route_short_name || y.route_id);
+                return isLetter(b) - isLetter(a) || a.localeCompare(b, 'fr', { numeric: true });
+            });
             S.icons = {};
             for (const f of files) {
                 const nm = f.name.toLowerCase();
@@ -520,6 +619,8 @@ iframe {
         }
         if (pts.length)
             map.fitBounds(pts, { padding: [20, 20] });
+        const names = [...new Set(Object.keys(markers).map(sName))].sort((a, b) => a.localeCompare(b, 'fr'));
+        $('stopNames').innerHTML = names.map(n => `<option value="${esc(n)}">`).join('');
     }
 
     // Lignes qui passent par un arrêt.
@@ -531,14 +632,33 @@ iframe {
     // ====================================================================
     // 5. POP-UP DE DÉVIATION D'UN ARRÊT
     // ====================================================================
-    // Maxime MATEO
+    // mmateo
     // Ouvre le pop-up : une case et un arrêt de report par ligne.
     function openDlg(id) {
         const cur = S.dev.get(id) || {}, rs = routesOf(id), d = $('dlg');
         d.innerHTML = `<h2>${esc(sName(id))}</h2><p class="hint">Coche les lignes pour lesquelles cet arrêt n’est pas desservi et indique l’arrêt de report.</p>
-  <div>${rs.map((r, i) => `<div class="lrow"><input type="checkbox" id="c${i}" data-r="${esc(r.route_id)}" ${S.dev.has(id) ? (cur[r.route_id]?.on ? 'checked' : '') : 'checked'}><label for="c${i}">${esc(routeName(r))}${r.route_long_name ? ' — ' + esc(r.route_long_name) : ''}</label><input type="text" data-p="${i}" placeholder="Arrêt de report" value="${esc(cur[r.route_id]?.report || '')}"></div>`).join('')}</div>
+  <div class="all"><label><input type="checkbox" id="same" checked>Même arrêt de report pour toutes les lignes</label><input type="text" id="allRep" list="stopNames" placeholder="Arrêt de report commun"></div>
+  <div>${rs.map((r, i) => `<div class="lrow"><input type="checkbox" id="c${i}" data-r="${esc(r.route_id)}" ${S.dev.has(id) ? (cur[r.route_id]?.on ? 'checked' : '') : 'checked'}><label for="c${i}">${esc(routeName(r))}${r.route_long_name ? ' — ' + esc(r.route_long_name) : ''}</label><input type="text" data-p="${i}" list="stopNames" placeholder="Arrêt de report" value="${esc(cur[r.route_id]?.report || '')}"></div>`).join('')}</div>
   <div class="actions"><button class="primary" id="ok">Valider</button><button id="no">Annuler</button>${S.dev.has(id) ? '<button class="danger" id="del">Retirer cet arrêt</button>' : ''}</div>`;
         const close = () => d.close();
+        // Case « même report » : recopie l'arrêt commun dans toutes les lignes.
+        const lineInputs = [...d.querySelectorAll('input[data-p]')];
+        const fillAll = () => {
+            const on = $('same').checked;
+            lineInputs.forEach(i => {
+                i.disabled = on;
+                if (on)
+                    i.value = $('allRep').value;
+            });
+        };
+        const reps = rs.filter(r => cur[r.route_id]?.on).map(r => (cur[r.route_id].report || '').trim());
+        if (reps.length && new Set(reps).size > 1)
+            $('same').checked = false;
+        else
+            $('allRep').value = reps[0] || '';
+        fillAll();
+        $('same').onchange = fillAll;
+        $('allRep').oninput = fillAll;
         $('no').onclick = close;
         if ($('del'))
             $('del').onclick = () => {
@@ -551,7 +671,7 @@ iframe {
         $('ok').onclick = () => {
             const o = {};
             let n = 0;
-            d.querySelectorAll('input[type=checkbox]').forEach((c, i) => {
+            d.querySelectorAll('input[data-r]').forEach((c, i) => {
                 const rep = d.querySelector(`input[data-p="${i}"]`).value.trim();
                 o[c.dataset.r] = { on: c.checked, report: rep };
                 if (c.checked)
@@ -581,6 +701,10 @@ iframe {
         const dv = Array.isArray(d) ? d : (d.dev || []);
         S.dev = new Map(dv.filter(([id]) => S.stops[id]));
         S.hidden = new Set(Array.isArray(d) ? [] : (d.hidden || []));
+        if (!Array.isArray(d) && d.bp !== undefined)
+            S.bp = +d.bp;
+        $('bp').value = S.bp;
+        $('bpv').textContent = S.bp ? S.bp + ' px' : 'jamais';
         for (const id in markers)
             markers[id].setStyle(style(id));
         renderRoutes();
@@ -628,13 +752,18 @@ iframe {
         }
         const f = $('preview');
         f.srcdoc = makeHTML();
-        f.onload = () => {
-            try {
-                f.style.height = f.contentDocument.documentElement.scrollHeight + 10 + 'px';
-            }
-            catch (e) {
-            }
-        };
+        f.onload = fitPreview;
+    }
+
+    // Ajuste la hauteur de l'aperçu à son contenu.
+    function fitPreview() {
+        const f = $('preview');
+        try {
+            f.style.height = '10px';
+            f.style.height = f.contentDocument.documentElement.scrollHeight + 10 + 'px';
+        }
+        catch (e) {
+        }
     }
 
     // ====================================================================
@@ -647,7 +776,7 @@ iframe {
         return d.toLocaleDateString('fr-FR') + ' à ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
     }
 
-    // Lignes de texte d'une ligne de bus : regroupe les deux côtés d'un arrêt si le report est identique, sinon précise le sens.
+    // Arrêts non desservis d'une ligne : [{name, dirs, rep}]. Les deux côtés d'un arrêt sont regroupés si le report est identique, sinon le sens est précisé.
     function entriesFor(r) {
         const g = new Map(), out = [];
         for (const [id, o] of S.dev) {
@@ -667,24 +796,39 @@ iframe {
                     m.set(k, { rep: a.rep, ids: [] });
                 m.get(k).ids.push(a.id);
             });
-            const multi = m.size > 1;
             m.forEach(e => {
-                const dirs = multi ? [...new Set(e.ids.map(i => S.dir[r.route_id + '|' + i]).filter(Boolean))] : [];
-                out.push(`<li><strong>${esc(n)}</strong> non desservi${dirs.length ? ` (${esc(dirs.join(', '))})` : ''}${e.rep ? `<br>→ Report : <strong>${esc(e.rep)}</strong>` : ''}</li>`);
+                const dirs = m.size > 1 ? [...new Set(e.ids.map(i => S.dir[r.route_id + '|' + i]).filter(Boolean))] : [];
+                out.push({ name: n, dirs: dirs.join(', '), rep: e.rep });
             });
         });
         return out;
     }
 
-    // Construit la page publique complète (tableau de toutes les lignes cochées).
+    // Construit la page publique : 4 colonnes (ligne + destination | statut | arrêt non desservi | arrêt de report).
     function makeHTML() {
         const rows = S.routes.filter(r => !S.hidden.has(r.route_id)).map(r => {
             const items = entriesFor(r);
             const icon = S.icons[String(r.route_short_name).toLowerCase()] || S.icons[String(r.route_id).toLowerCase()];
-            const dv = items.length > 0;
-            return `<tr><td class="lc">${icon ? `<img src="${esc(icon)}" alt="${esc(routeName(r))}">` : `<strong>${esc(routeName(r))}</strong>`}${r.route_long_name ? `<br><small>${esc(r.route_long_name)}</small>` : ''}</td><td><span class="dot ${dv ? 'o' : 'g'}"></span>${dv ? 'Déviation en cours' : 'Circule normalement'}</td><td>${dv ? `<ul>${items.join('')}</ul>` : ''}</td></tr>`;
+            const dest = r.route_long_name || [...(S.heads[r.route_id] || [])].join(' / ');
+            const pairs = items.map(p => `<div class="pr"><div class="a"><strong>${esc(p.name)}</strong><span class="nd"> non desservi</span>${p.dirs ? ` <small>(${esc(p.dirs)})</small>` : ''}</div><div class="b${p.rep ? '' : ' e'}">${p.rep ? `<span class="rp">→ Report : </span><strong>${esc(p.rep)}</strong>` : '—'}</div></div>`).join('');
+            return `<div class="r"><div class="c1">${icon ? `<img src="${esc(icon)}" alt="${esc(routeName(r))}">` : `<strong>${esc(routeName(r))}</strong>`}${dest ? `<small>${esc(dest)}</small>` : ''}</div><div class="c2"><span class="dot ${items.length ? 'o' : 'g'}"></span>${items.length ? 'Déviation en cours' : 'Circule normalement'}</div><div class="p">${pairs}</div></div>`;
         }).join('');
-        return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Information trafic</title>
+        // Mise en page empilée : chaque ligne devient un bloc unique sous le seuil choisi.
+        const stack = S.bp > 0 ? `@media(max-width:${S.bp}px){
+  .r.h{display:none}
+  .a,.b{display:block}
+  .a strong,.b strong{background:none;padding:0}
+  .t{border:0;border-radius:0;overflow:visible}
+  .r{display:block;border:1px solid #ddd;border-radius:10px;margin-bottom:12px;padding:6px 0}
+  .r>.p{display:block}
+  .pr{display:flex;flex-wrap:wrap;align-items:baseline;border-top:1px solid #eee}
+  .pr>div{padding:6px 14px}
+  .pr>.b{padding-left:0}
+  .nd,.rp{display:inline}
+  .b.e{display:none}
+  .c1{align-items:flex-start;text-align:left}
+}` : '';
+        return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="author" content="mmateo"><title>Information trafic</title>
 <style>
 body {
   font-family:Inter,Arial,sans-serif;
@@ -706,40 +850,126 @@ h3 {
   margin:0 0 14px;
 }
 
-.tw {
-  overflow-x:auto;
+.t {
   border:1px solid #ddd;
   border-radius:10px;
+  overflow:hidden;
 }
 
-table {
-  width:100%;
-  border-collapse:collapse;
-}
-
-th,td {
-  padding:10px 14px;
+.r {
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
   border-bottom:1px solid #eee;
-  text-align:left;
-  vertical-align:middle;
 }
 
-th {
+.r:last-child {
+  border-bottom:0;
+}
+
+.h {
   background:#f9f9f9;
+  font-weight:700;
 }
 
-.lc {
+.r>div,.pr>div {
+  padding:10px 14px;
+}
+
+.c1 {
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  align-items:center;
   text-align:center;
-  min-width:120px;
+  gap:2px;
 }
 
-.lc img {
+.c1 img {
+  display:block;
   max-height:34px;
   max-width:75px;
 }
 
-.lc small {
+.c1 small {
   color:#666;
+}
+
+.c2 {
+  display:flex;
+  align-items:center;
+}
+
+.r>.p {
+  grid-column:3/5;
+  padding:0;
+}
+
+.h .p>div {
+  padding:10px 14px;
+}
+
+.h .p {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+}
+
+.pr {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  align-items:stretch;
+  flex:1;
+}
+
+.a,.b {
+  display:flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:0 4px;
+}
+
+.h>div,.h .p>div {
+  display:flex;
+  align-items:center;
+}
+
+.h>div:first-child {
+  justify-content:center;
+}
+
+.r>.p {
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+}
+
+.r.h>.p {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+}
+
+.pr+.pr {
+  border-top:1px dotted #ddd;
+}
+
+.nd,.rp {
+  display:none;
+}
+
+.a strong,.b strong {
+  padding:1px 5px;
+  border-radius:4px;
+}
+
+.a strong {
+  background:#fdeceb;
+}
+
+.b strong {
+  background:#e8f6ee;
+}
+
+.b.e {
+  color:#999;
 }
 
 .dot {
@@ -748,6 +978,7 @@ th {
   height:11px;
   border-radius:50%;
   margin-right:8px;
+  flex:none;
 }
 
 .g {
@@ -758,37 +989,11 @@ th {
   background:#e67e22;
 }
 
-ul {
-  margin:0;
-  padding-left:18px;
-}
-
-@media(max-width:680px) {
-  thead {
-    display:none;
-  }
-  table,tbody,tr,td {
-    display:block;
-    width:100%;
-  }
-  tr {
-    margin-bottom:12px;
-    padding:8px;
-    border:1px solid #eee;
-    border-radius:8px;
-  }
-  td {
-    border:0;
-    padding:6px 0;
-  }
-  .lc {
-    text-align:left;
-  }
-}
-
+${stack}
 </style></head><body>
+<!-- mmateo -->
 <h3>Information trafic</h3><p class="meta">Mis à jour le ${stamp()}</p>
-<div class="tw"><table><thead><tr><th>Ligne</th><th>Statut</th><th>Arrêts non desservis</th></tr></thead><tbody>${rows || '<tr><td colspan="3">Importe un GTFS.</td></tr>'}</tbody></table></div></body></html>`;
+<div class="t"><div class="r h"><div>Ligne</div><div>Statut</div><div class="p"><div>Arrêts non desservis</div><div>Arrêt de report</div></div></div>${rows || '<div class="r"><div>Importe un GTFS.</div></div>'}</div></body></html>`;
     }
 
     // ====================================================================
@@ -805,6 +1010,46 @@ ul {
         a.remove();
         setTimeout(() => URL.revokeObjectURL(u), 1000);
     }
+    
+    const PUB_KEY = 'gtfsDevPublished';
+    const showPublic = () => {
+        let d = null;
+        try {
+            d = JSON.parse(localStorage.getItem(PUB_KEY) || 'null');
+        }
+        catch (e) {
+        }
+        const ok = !!(d && d.html);
+        $('pubMsg').hidden = ok;
+        $('pubFrame').hidden = !ok;
+        if (!ok)
+            $('pubMsg').textContent = 'Aucune information trafic publiée pour le moment.';
+        else if ($('pubFrame').dataset.t !== String(d.t)) {
+            $('pubFrame').dataset.t = d.t;
+            $('pubFrame').srcdoc = d.html;
+        }
+    };
+    // Ajuste la hauteur du cadre et la signale au site qui contient l'iframe.
+    const fitPub = () => {
+        const f = $('pubFrame');
+        try {
+            f.style.height = '10px';
+            const h = f.contentDocument.documentElement.scrollHeight + 10;
+            f.style.height = h + 'px';
+            parent.postMessage({ trafic: 'height', h }, '*');
+        }
+        catch (e) {
+        }
+    };
+    $('publish').onclick = () => {
+        try {
+            localStorage.setItem(PUB_KEY, JSON.stringify({ t: Date.now(), html: makeHTML() }));
+            msg('Envoyé. La page publique (' + location.href.split(/[?#]/)[0] + ') est à jour.', true);
+        }
+        catch (e) {
+            msg('Envoi impossible : stockage du navigateur indisponible.', false);
+        }
+    };
 
     // Affiche un message d'état sous les boutons.
     const msg = (t, ok) => {
@@ -844,7 +1089,7 @@ ul {
     };
     $('saveDraft').onclick = () => {
         try {
-            localStorage.setItem('gtfsDevDraftV2', JSON.stringify({ dev: [...S.dev], hidden: [...S.hidden] }));
+            localStorage.setItem('gtfsDevDraftV2', JSON.stringify({ dev: [...S.dev], hidden: [...S.hidden], bp: S.bp }));
             msg('Brouillon sauvegardé.', true);
         }
         catch (e) {
@@ -865,7 +1110,7 @@ ul {
     };
     $('exportArchive').onclick = () => {
         const n = new Date(), p = x => String(x).padStart(2, '0');
-        download(JSON.stringify({ version: 2, savedAt: n.toISOString(), dev: [...S.dev], hidden: [...S.hidden] }, null, 1), `archive-deviations-${n.getFullYear()}-${p(n.getMonth() + 1)}-${p(n.getDate())}-${p(n.getHours())}${p(n.getMinutes())}.json`, 'application/json');
+        download(JSON.stringify({ version: 2, savedAt: n.toISOString(), dev: [...S.dev], hidden: [...S.hidden], bp: S.bp }, null, 1), `archive-deviations-${n.getFullYear()}-${p(n.getMonth() + 1)}-${p(n.getDate())}-${p(n.getHours())}${p(n.getMinutes())}.json`, 'application/json');
         msg('Archive enregistrée dans tes téléchargements.', true);
     };
     $('importArchive').onclick = () => $('archiveFile').click();
@@ -904,8 +1149,32 @@ ul {
             msg('Copie refusée : télécharge le HTML.', false);
         }
     };
-    initMap();
-    update();
+    // Curseur 1 : largeur simulée de l'aperçu. Curseur 2 : seuil d'empilement des lignes.
+    $('pvW').oninput = e => {
+        const v = +e.target.value, f = $('preview');
+        f.style.width = v >= 1280 ? '100%' : v + 'px';
+        $('pvWv').textContent = v >= 1280 ? 'pleine largeur' : v + ' px';
+        setTimeout(fitPreview, 60);
+    };
+    $('bp').oninput = e => {
+        S.bp = +e.target.value;
+        $('bpv').textContent = S.bp ? S.bp + ' px' : 'jamais';
+        update();
+    };
+    if (document.documentElement.className === 'pub') {
+        // Page publique : pas de plan ni de formulaire.
+        $('pubFrame').onload = fitPub;
+        addEventListener('resize', () => setTimeout(fitPub, 80));
+        addEventListener('storage', e => {
+            if (e.key === PUB_KEY)
+                showPublic();
+        });
+        showPublic();
+    }
+    else {
+        initMap();
+        update();
+    }
 })();
 </script>
 </body></html>
