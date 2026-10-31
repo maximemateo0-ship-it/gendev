@@ -1,7 +1,6 @@
 <!doctype html>
 <html lang="fr">
 <head>
-<script>if (!/13032004$/.test(location.href)) document.documentElement.className = 'pub';</script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="author" content="mmateo">
@@ -294,37 +293,6 @@ iframe {
   margin-bottom:6px;
 }
 
-html.pub #app {
-  display:none;
-}
-
-html:not(.pub) #pub {
-  display:none;
-}
-
-html.pub body {
-  background:transparent;
-}
-
-#pubFrame {
-  display:block;
-  border:0;
-  border-radius:0;
-  min-height:0;
-  height:300px;
-  background:transparent;
-}
-
-.pubmsg {
-  text-align:center;
-  color:var(--muted);
-  padding:30px 10px;
-}
-
-[hidden] {
-  display:none !important;
-}
-
 .sig {
   text-align:center;
   font-size:.7rem;
@@ -347,8 +315,6 @@ html.pub body {
 </style>
 </head>
 <body>
-<div id="pub"><iframe id="pubFrame" title="Information trafic" hidden></iframe><p id="pubMsg" class="pubmsg" hidden></p></div>
-<div id="app">
 <header><h1>Générateur de déviations réseau</h1><p>Clique sur les arrêts du plan, indique l’arrêt de report pour chaque ligne, exporte le tableau.</p></header>
 <main>
 <section>
@@ -374,8 +340,7 @@ html.pub body {
       <button id="loadDraft" type="button">Restaurer</button>
       <button id="exportArchive" type="button">Enregistrer une archive (fichier)</button>
       <button id="importArchive" type="button">Ouvrir une archive</button><input id="archiveFile" type="file" accept=".json,application/json" hidden>
-      <button id="publish" type="button" class="primary">Envoyer vers la page publique</button>
-      <button id="exportHtml" type="button">Télécharger le HTML</button>
+      <button id="exportHtml" type="button" class="primary">Télécharger le HTML</button>
       <button id="copyHtml" type="button">Copier le HTML</button>
     </div>
     <div id="saveStatus" class="statusline">Le brouillon (navigateur) et l’archive (fichier .json) conservent les arrêts, reports et lignes choisies, pas le GTFS.</div>
@@ -397,10 +362,9 @@ html.pub body {
   </div>
 </section>
 </main>
-<div class="sig">mmateo</div>
-</div>
 <datalist id="stopNames"></datalist>
 <dialog id="dlg"></dialog>
+<div class="sig">mmateo</div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 /*
@@ -508,7 +472,7 @@ html.pub body {
         }
         try {
             const [rt, tr, stp] = await Promise.all(['routes.txt', 'trips.txt', 'stops.txt'].map(n => byName(files, n).text()));
-            const routes = table(rt, ['route_id', 'route_short_name', 'route_long_name']);
+            const routes = table(rt, ['route_id', 'route_short_name', 'route_long_name', 'route_color']);
             S.heads = {};
             const tripRoute = {};
             const tripDir = {};
@@ -798,10 +762,35 @@ html.pub body {
             });
             m.forEach(e => {
                 const dirs = m.size > 1 ? [...new Set(e.ids.map(i => S.dir[r.route_id + '|' + i]).filter(Boolean))] : [];
-                out.push({ name: n, dirs: dirs.join(', '), rep: e.rep });
+                out.push({ name: n, dirs: dirs.join(', '), rep: e.rep, ids: e.ids });
             });
         });
         return out;
+    }
+
+    // Couleur de bordure d'une ligne : route_color du GTFS (hex sans #). Repli gris si absente, invalide ou trop claire pour être visible.
+    function borderColor(r) {
+        const h = String(r.route_color || '').trim().replace(/^#/, '');
+        if (!/^([0-9a-f]{6}|[0-9a-f]{3})$/i.test(h))
+            return '#d5d9dc';
+        const f = h.length === 3 ? h.replace(/./g, '$&$&') : h;
+        const lum = (0.299 * parseInt(f.slice(0, 2), 16) + 0.587 * parseInt(f.slice(2, 4), 16) + 0.114 * parseInt(f.slice(4, 6), 16)) / 255;
+        return lum > 0.92 ? '#d5d9dc' : '#' + f.toLowerCase();
+    }
+
+    // Lien Google Maps (à pied) de l'arrêt non desservi vers l'arrêt de report, localisés via le GTFS. Renvoie '' si l'un des deux est introuvable.
+    function mapsLink(p) {
+        const ok = s => s && s.stop_lat !== '' && s.stop_lon !== '' && isFinite(+s.stop_lat) && isFinite(+s.stop_lon);
+        const from = (p.ids || []).map(i => S.stops[i]).find(ok);
+        if (!from || !p.rep)
+            return '';
+        const key = p.rep.trim().toLowerCase();
+        const d = s => (+s.stop_lat - +from.stop_lat) ** 2 + (+s.stop_lon - +from.stop_lon) ** 2;
+        // Plusieurs quais peuvent porter le même nom : on prend le plus proche de l'arrêt non desservi.
+        const to = Object.values(S.stops).filter(s => ok(s) && String(s.stop_name).trim().toLowerCase() === key).sort((a, b) => d(a) - d(b))[0];
+        if (!to)
+            return '';
+        return 'https://www.google.com/maps/dir/?api=1&origin=' + from.stop_lat + ',' + from.stop_lon + '&destination=' + to.stop_lat + ',' + to.stop_lon + '&travelmode=walking';
     }
 
     // Construit la page publique : 4 colonnes (ligne + destination | statut | arrêt non desservi | arrêt de report).
@@ -810,20 +799,22 @@ html.pub body {
             const items = entriesFor(r);
             const icon = S.icons[String(r.route_short_name).toLowerCase()] || S.icons[String(r.route_id).toLowerCase()];
             const dest = r.route_long_name || [...(S.heads[r.route_id] || [])].join(' / ');
-            const pairs = items.map(p => `<div class="pr"><div class="a"><strong>${esc(p.name)}</strong><span class="nd"> non desservi</span>${p.dirs ? ` <small>(${esc(p.dirs)})</small>` : ''}</div><div class="b${p.rep ? '' : ' e'}">${p.rep ? `<span class="rp">→ Report : </span><strong>${esc(p.rep)}</strong>` : '—'}</div></div>`).join('');
-            return `<div class="r"><div class="c1">${icon ? `<img src="${esc(icon)}" alt="${esc(routeName(r))}">` : `<strong>${esc(routeName(r))}</strong>`}${dest ? `<small>${esc(dest)}</small>` : ''}</div><div class="c2"><span class="dot ${items.length ? 'o' : 'g'}"></span>${items.length ? 'Déviation en cours' : 'Circule normalement'}</div><div class="p">${pairs}</div></div>`;
+            const pairs = items.map(p => `<div class="pr"><div class="a"><strong>${esc(p.name)}</strong><span class="nd"> non desservi</span>${p.dirs ? ` <small>(${esc(p.dirs)})</small>` : ''}</div><div class="b${p.rep ? '' : ' e'}">${p.rep ? `<span class="rp">→ Report : </span><strong>${esc(p.rep)}</strong>` : '—'}</div><div class="i">${mapsLink(p) ? `<a class="it" href="${esc(mapsLink(p))}" target="_blank" rel="noopener" title="Itinéraire à pied vers ${esc(p.rep)}"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l18-8-8 18-2-8z"/></svg>Itinéraire</a>` : ''}</div></div>`).join('');
+            return `<div class="r k" style="--rc:${borderColor(r)}"><div class="c1">${icon ? `<img src="${esc(icon)}" alt="${esc(routeName(r))}">` : `<strong>${esc(routeName(r))}</strong>`}${dest ? `<small>${esc(dest)}</small>` : ''}</div><div class="c2"><span class="dot ${items.length ? 'o' : 'g'}"></span>${items.length ? 'Déviation en cours' : 'Circule normalement'}</div><div class="p">${pairs}</div></div>`;
         }).join('');
         // Mise en page empilée : chaque ligne devient un bloc unique sous le seuil choisi.
         const stack = S.bp > 0 ? `@media(max-width:${S.bp}px){
   .r.h{display:none}
   .a,.b{display:block}
   .a strong,.b strong{background:none;padding:0}
-  .t{border:0;border-radius:0;overflow:visible}
-  .r{display:block;border:1px solid #ddd;border-radius:10px;margin-bottom:12px;padding:6px 0}
+  .r{display:block;padding:6px 0}
+  .r.k{margin-bottom:12px}
   .r>.p{display:block}
   .pr{display:flex;flex-wrap:wrap;align-items:baseline;border-top:1px solid #eee}
   .pr>div{padding:6px 14px}
   .pr>.b{padding-left:0}
+  .pr>.i{padding-left:0 !important}
+  .i:empty{display:none}
   .nd,.rp{display:inline}
   .b.e{display:none}
   .c1{align-items:flex-start;text-align:left}
@@ -851,9 +842,7 @@ h3 {
 }
 
 .t {
-  border:1px solid #ddd;
-  border-radius:10px;
-  overflow:hidden;
+  border:0;
 }
 
 .r {
@@ -862,8 +851,21 @@ h3 {
   border-bottom:1px solid #eee;
 }
 
-.r:last-child {
+.r.h {
   border-bottom:0;
+  border-radius:10px;
+  margin-bottom:10px;
+  padding:0 2px;
+}
+
+.r.k {
+  border:2px solid var(--rc,#d5d9dc);
+  border-radius:10px;
+  margin-bottom:10px;
+}
+
+.r:last-child {
+  margin-bottom:0;
 }
 
 .h {
@@ -910,12 +912,12 @@ h3 {
 
 .h .p {
   display:grid;
-  grid-template-columns:1fr 1fr;
+  grid-template-columns:1fr 1fr 118px;
 }
 
 .pr {
   display:grid;
-  grid-template-columns:1fr 1fr;
+  grid-template-columns:1fr 1fr 118px;
   align-items:stretch;
   flex:1;
 }
@@ -944,7 +946,7 @@ h3 {
 
 .r.h>.p {
   display:grid;
-  grid-template-columns:1fr 1fr;
+  grid-template-columns:1fr 1fr 118px;
 }
 
 .pr+.pr {
@@ -966,6 +968,32 @@ h3 {
 
 .b strong {
   background:#e8f6ee;
+}
+
+.i {
+  display:flex;
+  align-items:center;
+  padding-left:0 !important;
+}
+
+.it {
+  display:inline-flex;
+  align-items:center;
+  gap:4px;
+  padding:1px 8px;
+  border:1px solid #cfd6da;
+  border-radius:999px;
+  color:#155e75;
+  font-size:.8rem;
+  font-weight:600;
+  line-height:1.6;
+  text-decoration:none;
+  white-space:nowrap;
+}
+
+.it:hover {
+  background:#f0f5f6;
+  border-color:#155e75;
 }
 
 .b.e {
@@ -993,7 +1021,7 @@ ${stack}
 </style></head><body>
 <!-- mmateo -->
 <h3>Information trafic</h3><p class="meta">Mis à jour le ${stamp()}</p>
-<div class="t"><div class="r h"><div>Ligne</div><div>Statut</div><div class="p"><div>Arrêts non desservis</div><div>Arrêt de report</div></div></div>${rows || '<div class="r"><div>Importe un GTFS.</div></div>'}</div></body></html>`;
+<div class="t"><div class="r h"><div>Ligne</div><div>Statut</div><div class="p"><div>Arrêts non desservis</div><div>Arrêt de report</div><div></div></div></div>${rows || '<div class="r"><div>Importe un GTFS.</div></div>'}</div></body></html>`;
     }
 
     // ====================================================================
@@ -1010,46 +1038,6 @@ ${stack}
         a.remove();
         setTimeout(() => URL.revokeObjectURL(u), 1000);
     }
-    
-    const PUB_KEY = 'gtfsDevPublished';
-    const showPublic = () => {
-        let d = null;
-        try {
-            d = JSON.parse(localStorage.getItem(PUB_KEY) || 'null');
-        }
-        catch (e) {
-        }
-        const ok = !!(d && d.html);
-        $('pubMsg').hidden = ok;
-        $('pubFrame').hidden = !ok;
-        if (!ok)
-            $('pubMsg').textContent = 'Aucune information trafic publiée pour le moment.';
-        else if ($('pubFrame').dataset.t !== String(d.t)) {
-            $('pubFrame').dataset.t = d.t;
-            $('pubFrame').srcdoc = d.html;
-        }
-    };
-    // Ajuste la hauteur du cadre et la signale au site qui contient l'iframe.
-    const fitPub = () => {
-        const f = $('pubFrame');
-        try {
-            f.style.height = '10px';
-            const h = f.contentDocument.documentElement.scrollHeight + 10;
-            f.style.height = h + 'px';
-            parent.postMessage({ trafic: 'height', h }, '*');
-        }
-        catch (e) {
-        }
-    };
-    $('publish').onclick = () => {
-        try {
-            localStorage.setItem(PUB_KEY, JSON.stringify({ t: Date.now(), html: makeHTML() }));
-            msg('Envoyé. La page publique (' + location.href.split(/[?#]/)[0] + ') est à jour.', true);
-        }
-        catch (e) {
-            msg('Envoi impossible : stockage du navigateur indisponible.', false);
-        }
-    };
 
     // Affiche un message d'état sous les boutons.
     const msg = (t, ok) => {
@@ -1161,20 +1149,8 @@ ${stack}
         $('bpv').textContent = S.bp ? S.bp + ' px' : 'jamais';
         update();
     };
-    if (document.documentElement.className === 'pub') {
-        // Page publique : pas de plan ni de formulaire.
-        $('pubFrame').onload = fitPub;
-        addEventListener('resize', () => setTimeout(fitPub, 80));
-        addEventListener('storage', e => {
-            if (e.key === PUB_KEY)
-                showPublic();
-        });
-        showPublic();
-    }
-    else {
-        initMap();
-        update();
-    }
+    initMap();
+    update();
 })();
 </script>
 </body></html>
