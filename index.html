@@ -121,6 +121,35 @@ button.danger {
 }
 
 
+.glabel {
+  font-size:.8rem;
+  font-weight:650;
+  color:var(--muted);
+  text-transform:uppercase;
+  letter-spacing:.04em;
+  margin:14px 0 6px;
+}
+
+.glabel:first-of-type {
+  margin-top:10px;
+}
+
+.grp {
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+  gap:8px;
+}
+
+.grp button {
+  width:100%;
+  text-align:center;
+}
+
+.grp+.statusline,
+.grp~.statusline {
+  margin-top:14px;
+}
+
 .statusline {
   font-size:.9rem;
   padding:9px 11px;
@@ -268,6 +297,54 @@ iframe {
   font-size:.9rem;
 }
 
+.sw {
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  cursor:pointer;
+}
+
+.sw input {
+  position:absolute;
+  opacity:0;
+  pointer-events:none;
+}
+
+.sw .knob {
+  position:relative;
+  width:34px;
+  height:20px;
+  border-radius:999px;
+  background:#c9d0d4;
+  transition:background .15s;
+  flex:none;
+}
+
+.sw .knob::after {
+  content:"";
+  position:absolute;
+  top:2px;
+  left:2px;
+  width:16px;
+  height:16px;
+  border-radius:50%;
+  background:#fff;
+  transition:transform .15s;
+}
+
+.sw input:checked+.knob {
+  background:#155e75;
+}
+
+.sw input:checked+.knob::after {
+  transform:translateX(14px);
+}
+
+.sw input:focus-visible+.knob {
+  outline:2px solid #155e75;
+  outline-offset:2px;
+}
+
 .ctl label {
   display:flex;
   align-items:center;
@@ -335,15 +412,18 @@ iframe {
   </div>
   <div class="panel">
     <h2>4. Sauvegarder et exporter</h2>
-    <div class="actions">
-      <button id="saveDraft" type="button">Sauvegarder le brouillon</button>
-      <button id="loadDraft" type="button">Restaurer</button>
-      <button id="exportArchive" type="button">Enregistrer une archive (fichier)</button>
+    <div class="glabel">Archive des déviations</div>
+    <div class="grp">
+      <button id="exportArchive" type="button">Enregistrer l’archive</button>
       <button id="importArchive" type="button">Ouvrir une archive</button><input id="archiveFile" type="file" accept=".json,application/json" hidden>
+    </div>
+    <div class="glabel">Rendu final</div>
+    <div class="grp">
       <button id="exportHtml" type="button" class="primary">Télécharger le HTML</button>
       <button id="copyHtml" type="button">Copier le HTML</button>
+      <button id="copyRich" type="button" title="HTML sans feuille de style, à coller en mode Source dans un éditeur de texte enrichi (Drupal…)">Copier pour texte enrichi</button>
     </div>
-    <div id="saveStatus" class="statusline">Le brouillon (navigateur) et l’archive (fichier .json) conservent les arrêts, reports et lignes choisies, pas le GTFS.</div>
+    <div id="saveStatus" class="statusline">L’archive (fichier .json) conserve les arrêts, reports, lignes choisies et l’empilement, pas le GTFS.</div>
   </div>
 </section>
 <section>
@@ -354,11 +434,10 @@ iframe {
   </div>
   <div class="panel"><h2>Aperçu du rendu final</h2>
     <div class="ctl">
-      <label>Largeur de l’aperçu <input id="pvW" type="range" min="320" max="1280" step="10" value="1280"><span id="pvWv">pleine largeur</span></label>
-      <label>Lignes empilées sous <input id="bp" type="range" min="0" max="3000" step="10" value="700"><span id="bpv">700 px</span></label>
+      <label class="sw"><input type="checkbox" id="stack" checked><span class="knob"></span>Lignes empilées</label>
     </div>
     <iframe id="preview" title="Aperçu"></iframe>
-    <p class="hint">Le curseur du haut simule un écran plus étroit. Celui du bas fixe la largeur sous laquelle chaque ligne devient un bloc unique (0 = jamais) ; ce réglage est inclus dans le HTML exporté.</p>
+    <p class="hint">Activé : chaque ligne devient un bloc unique (ligne, statut, puis chaque arrêt avec son report). Désactivé : tableau en colonnes. Ce réglage est inclus dans le HTML exporté.</p>
   </div>
 </section>
 </main>
@@ -383,7 +462,7 @@ iframe {
     // ====================================================================
     const $ = id => document.getElementById(id);
     const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-    const S = { routes: [], stops: {}, routesByStop: {}, icons: {}, dev: new Map(), hidden: new Set(), dir: {}, heads: {}, bp: 700 }; // dev: stopId -> {routeId:{on,report}}
+    const S = { routes: [], stops: {}, routesByStop: {}, icons: {}, dev: new Map(), hidden: new Set(), dir: {}, heads: {}, stack: true }; // dev: stopId -> {routeId:{on,report}}
     const markers = {};
     let map, layer;
     const STD = ['agency', 'calendar', 'calendar_dates', 'routes', 'trips', 'stop_times', 'stops', 'shapes', 'feed_info', 'transfers', 'frequencies', 'fare_attributes', 'fare_rules', 'pathways', 'levels', 'translations', 'attributions'];
@@ -660,15 +739,18 @@ iframe {
     // 6. ARCHIVE, CHOIX DES LIGNES ET MISE À JOUR DE L'ÉCRAN
     // ====================================================================
 
-    // Applique une archive/brouillon (arrêts déviés + lignes choisies).
+    // Applique une archive (arrêts déviés + lignes choisies).
     function applyArchive(d) {
         const dv = Array.isArray(d) ? d : (d.dev || []);
         S.dev = new Map(dv.filter(([id]) => S.stops[id]));
         S.hidden = new Set(Array.isArray(d) ? [] : (d.hidden || []));
-        if (!Array.isArray(d) && d.bp !== undefined)
-            S.bp = +d.bp;
-        $('bp').value = S.bp;
-        $('bpv').textContent = S.bp ? S.bp + ' px' : 'jamais';
+        if (!Array.isArray(d)) {
+            if (d.stack !== undefined)
+                S.stack = !!d.stack;
+            else if (d.bp !== undefined)
+                S.stack = +d.bp > 0; // anciennes archives
+        }
+        $('stack').checked = S.stack;
         for (const id in markers)
             markers[id].setStyle(style(id));
         renderRoutes();
@@ -803,8 +885,7 @@ iframe {
             return `<div class="r k" style="--rc:${borderColor(r)}"><div class="c1">${icon ? `<img src="${esc(icon)}" alt="${esc(routeName(r))}">` : `<strong>${esc(routeName(r))}</strong>`}${dest ? `<small>${esc(dest)}</small>` : ''}</div><div class="c2"><span class="dot ${items.length ? 'o' : 'g'}"></span>${items.length ? 'Déviation en cours' : 'Circule normalement'}</div><div class="p">${pairs}</div></div>`;
         }).join('');
         // Mise en page empilée : chaque ligne devient un bloc unique sous le seuil choisi.
-        const stack = S.bp > 0 ? `@media(max-width:${S.bp}px){
-  .r.h{display:none}
+        const stack = S.stack ? `.r.h{display:none}
   .a,.b{display:block}
   .a strong,.b strong{background:none;padding:0}
   .r{display:block;padding:6px 0}
@@ -817,8 +898,7 @@ iframe {
   .i:empty{display:none}
   .nd,.rp{display:inline}
   .b.e{display:none}
-  .c1{align-items:flex-start;text-align:left}
-}` : '';
+  .c1{align-items:flex-start;text-align:left}` : '';
         return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="author" content="mmateo"><title>Information trafic</title>
 <style>
 body {
@@ -1024,9 +1104,60 @@ ${stack}
 <div class="t"><div class="r h"><div>Ligne</div><div>Statut</div><div class="p"><div>Arrêts non desservis</div><div>Arrêt de report</div><div></div></div></div>${rows || '<div class="r"><div>Importe un GTFS.</div></div>'}</div></body></html>`;
     }
 
+
+    // Variante empilée du format « texte enrichi » : un bloc par ligne, sans colonnes, donc lisible à toute largeur.
+    function makeRichStacked() {
+        const rows = S.routes.filter(r => !S.hidden.has(r.route_id)).map(r => {
+            const items = entriesFor(r);
+            const icon = S.icons[String(r.route_short_name).toLowerCase()] || S.icons[String(r.route_id).toLowerCase()];
+            const dest = r.route_long_name || [...(S.heads[r.route_id] || [])].join(' / ');
+            const top = `<div style="padding:8px 14px"><span style="display:inline-block;margin-right:10px">${icon ? `<img src="${esc(icon)}" alt="${esc(routeName(r))}" height="34" style="height:34px;width:auto;border:0;vertical-align:middle">` : `<strong>${esc(routeName(r))}</strong>`}</span>${dest ? `<small style="color:#666">${esc(dest)}</small>` : ''}<div style="margin-top:2px"><span style="color:${items.length ? '#e67e22' : '#27ae60'}">&#9679;</span>&nbsp; ${items.length ? 'Déviation en cours' : 'Circule normalement'}</div></div>`;
+            const pairs = items.map(p => {
+                const btn = mapsLink(p) ? `<a href="${esc(mapsLink(p))}" target="_blank" rel="noopener" title="Itinéraire à pied vers ${esc(p.rep)}" style="display:inline-block;margin-left:6px;padding:1px 9px;border:1px solid #cfd6da;border-radius:999px;color:#155e75;font-size:.8em;font-weight:600;line-height:1.6;text-decoration:none;white-space:nowrap">&#10148; Itinéraire</a>` : '';
+                return `<div style="padding:8px 14px;border-top:1px dotted #ddd"><strong style="background:#fdeceb;padding:1px 5px;border-radius:4px">${esc(p.name)}</strong> non desservi${p.dirs ? ` <small>(${esc(p.dirs)})</small>` : ''}${p.rep ? ` &rarr; Report : <strong style="background:#e8f6ee;padding:1px 5px;border-radius:4px">${esc(p.rep)}</strong>${btn}` : ''}</div>`;
+            }).join('');
+            return `<div style="border:2px solid ${borderColor(r)};border-radius:10px;margin:0 0 12px">${top}${pairs}</div>`;
+        }).join('');
+        return `<!-- mmateo -->\n<h3>Information trafic</h3>\n<p>Mis à jour le ${stamp()}</p>\n${rows || '<p>Importe un GTFS.</p>'}`;
+    }
+
+    // Version « texte enrichi » (Drupal/CKEditor…) : aucun <style>, aucune classe, aucun SVG ni media query, tout est en style inline sur des tableaux.
+    // Les éditeurs filtrent le CSS de la page complète ; ici la mise en page tient sans feuille de style.
+    function makeRichHTML() {
+        if (S.stack)
+            return makeRichStacked();
+        const td = 'padding:10px 14px;vertical-align:middle;';
+        const head = ['Ligne', 'Statut', 'Arrêts non desservis', 'Arrêt de report', ''];
+        const W = ['18%', '17%', '', '', '124px'];
+        const cell = (i, extra) => `<td${W[i] ? ` width="${parseInt(W[i])}${W[i].endsWith('%') ? '%' : ''}"` : ''} style="${td}${W[i] ? 'width:' + W[i] + ';' : ''}${extra || ''}">`;
+        const header = `<table style="width:100%;min-width:680px;table-layout:fixed;border-collapse:separate;border-spacing:0;border:2px solid transparent;background:#f9f9f9;border-radius:10px;margin:0 0 10px;font-weight:700"><tbody><tr>${head.map((h, i) => cell(i, i === 0 ? 'text-align:center;' : '') + h + '</td>').join('')}</tr></tbody></table>`;
+        const rows = S.routes.filter(r => !S.hidden.has(r.route_id)).map(r => {
+            const items = entriesFor(r);
+            const icon = S.icons[String(r.route_short_name).toLowerCase()] || S.icons[String(r.route_id).toLowerCase()];
+            const dest = r.route_long_name || [...(S.heads[r.route_id] || [])].join(' / ');
+            const n = Math.max(items.length, 1);
+            const c1 = `${icon ? `<img src="${esc(icon)}" alt="${esc(routeName(r))}" height="34" style="height:34px;width:auto;border:0;display:inline-block">` : `<strong>${esc(routeName(r))}</strong>`}${dest ? `<br><small style="color:#666">${esc(dest)}</small>` : ''}`;
+            const c2 = `<span style="color:${items.length ? '#e67e22' : '#27ae60'}">&#9679;</span>&nbsp; ${items.length ? 'Déviation en cours' : 'Circule normalement'}`;
+            const pair = (p, k) => {
+                const bt = k ? 'border-top:1px dotted #ddd;' : '';
+                const btn = mapsLink(p) ? `<a href="${esc(mapsLink(p))}" target="_blank" rel="noopener" title="Itinéraire à pied vers ${esc(p.rep)}" style="display:inline-block;padding:1px 9px;border:1px solid #cfd6da;border-radius:999px;color:#155e75;font-size:.8em;font-weight:600;line-height:1.6;text-decoration:none;white-space:nowrap">&#10148; Itinéraire</a>` : '';
+                return cell(2, bt) + `<strong style="background:#fdeceb;padding:1px 5px;border-radius:4px">${esc(p.name)}</strong>${p.dirs ? ` <small>(${esc(p.dirs)})</small>` : ''}</td>`
+                    + cell(3, bt + (p.rep ? '' : 'color:#999;')) + (p.rep ? `<strong style="background:#e8f6ee;padding:1px 5px;border-radius:4px">${esc(p.rep)}</strong>` : '—') + '</td>'
+                    + cell(4, bt) + btn + '</td>';
+            };
+            const first = items.length ? pair(items[0], 0) : `<td colspan="3" style="${td}"></td>`;
+            const rest = items.slice(1).map((p, k) => `<tr>${pair(p, k + 1)}</tr>`).join('');
+            return `<table style="width:100%;min-width:680px;table-layout:fixed;border-collapse:separate;border-spacing:0;border:2px solid ${borderColor(r)};border-radius:10px;margin:0 0 10px"><tbody><tr>${cell(0, 'text-align:center;').replace('<td', `<td rowspan="${n}"`)}${c1}</td>${cell(1).replace('<td', `<td rowspan="${n}"`)}${c2}</td>${first}</tr>${rest}</tbody></table>`;
+        }).join('');
+        return `<!-- mmateo -->\n<h3>Information trafic</h3>\n<p>Mis à jour le ${stamp()}</p>\n<div style="overflow-x:auto">${header}${rows || '<p>Importe un GTFS.</p>'}</div>`;
+    }
+
     // ====================================================================
     // 8. EXPORT, SAUVEGARDE ET BOUTONS
     // ====================================================================
+
+    // Tout caractère non ASCII devient une entité numérique (&#233;) : le HTML exporté s'affiche correctement quel que soit l'encodage du site d'accueil.
+    const ascii = h => h.replace(/[^\x00-\x7f]/gu, c => '&#' + c.codePointAt(0) + ';');
 
     // Télécharge un fichier.
     function download(c, n, t) {
@@ -1075,30 +1206,9 @@ ${stack}
         renderRoutes();
         update();
     };
-    $('saveDraft').onclick = () => {
-        try {
-            localStorage.setItem('gtfsDevDraftV2', JSON.stringify({ dev: [...S.dev], hidden: [...S.hidden], bp: S.bp }));
-            msg('Brouillon sauvegardé.', true);
-        }
-        catch (e) {
-            msg('Sauvegarde impossible.', false);
-        }
-    };
-    $('loadDraft').onclick = () => {
-        try {
-            const d = JSON.parse(localStorage.getItem('gtfsDevDraftV2') || 'null');
-            if (!d)
-                return msg('Aucun brouillon trouvé.', false);
-            applyArchive(d);
-            msg('Brouillon restauré (importe le GTFS avant).', true);
-        }
-        catch (e) {
-            msg('Erreur : ' + e.message, false);
-        }
-    };
     $('exportArchive').onclick = () => {
         const n = new Date(), p = x => String(x).padStart(2, '0');
-        download(JSON.stringify({ version: 2, savedAt: n.toISOString(), dev: [...S.dev], hidden: [...S.hidden], bp: S.bp }, null, 1), `archive-deviations-${n.getFullYear()}-${p(n.getMonth() + 1)}-${p(n.getDate())}-${p(n.getHours())}${p(n.getMinutes())}.json`, 'application/json');
+        download(JSON.stringify({ version: 2, savedAt: n.toISOString(), dev: [...S.dev], hidden: [...S.hidden], stack: S.stack }, null, 1), `archive-deviations-${n.getFullYear()}-${p(n.getMonth() + 1)}-${p(n.getDate())}-${p(n.getHours())}${p(n.getMinutes())}.json`, 'application/json');
         msg('Archive enregistrée dans tes téléchargements.', true);
     };
     $('importArchive').onclick = () => $('archiveFile').click();
@@ -1125,28 +1235,30 @@ ${stack}
         }
     };
     $('exportHtml').onclick = () => {
-        download(makeHTML(), 'information-trafic.html', 'text/html;charset=utf-8');
+        download(ascii(makeHTML()), 'information-trafic.html', 'text/html;charset=utf-8');
         msg('HTML généré.', true);
     };
     $('copyHtml').onclick = async () => {
         try {
-            await navigator.clipboard.writeText(makeHTML());
+            await navigator.clipboard.writeText(ascii(makeHTML()));
             msg('HTML copié.', true);
         }
         catch (e) {
             msg('Copie refusée : télécharge le HTML.', false);
         }
     };
-    // Curseur 1 : largeur simulée de l'aperçu. Curseur 2 : seuil d'empilement des lignes.
-    $('pvW').oninput = e => {
-        const v = +e.target.value, f = $('preview');
-        f.style.width = v >= 1280 ? '100%' : v + 'px';
-        $('pvWv').textContent = v >= 1280 ? 'pleine largeur' : v + ' px';
-        setTimeout(fitPreview, 60);
+    $('copyRich').onclick = async () => {
+        try {
+            await navigator.clipboard.writeText(ascii(makeRichHTML()));
+            msg('HTML « texte enrichi » copié : colle-le en mode Source (format Full HTML).', true);
+        }
+        catch (e) {
+            msg('Copie refusée par le navigateur.', false);
+        }
     };
-    $('bp').oninput = e => {
-        S.bp = +e.target.value;
-        $('bpv').textContent = S.bp ? S.bp + ' px' : 'jamais';
+    // Interrupteur : lignes empilées (bloc par ligne) ou tableau en colonnes.
+    $('stack').onchange = e => {
+        S.stack = e.target.checked;
         update();
     };
     initMap();
